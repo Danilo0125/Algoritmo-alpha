@@ -14,3 +14,10 @@ __pycache__/
 *.sqlite
 *.swp
 .DS_Store
+# IDE
+.idea/
+.vscode/
+
+.idea/SISTEMAS LINEALES.iml
+.idea/workspace.xml
+.idea/misc.xml
