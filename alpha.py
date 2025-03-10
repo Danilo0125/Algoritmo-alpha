@@ -1,575 +1,528 @@
-from itertools import combinations
+from itertools import combinations, product
 import pandas as pd
+import re
 
 class Alpha:
     def __init__(self):
-        self.trazas = []
-        self.directas = {}
-        self.causalidad = set()
-        self.paralelo = set()
-        self.decision = set()
-        self.actividades = []
-        self.lugares = []
-        self.tareas_iniciales = []
-        self.tareas_finales = []
-        # Nuevos atributos para el algoritmo de 8 pasos
-        self.xl = []
-        self.yl = []
-        self.pl = []
-        self.fl = []
+        self.event_log = []
+        self.direct_successions = {}
+        self.causal_relations = set()
+        self.concurrent_relations = set()
+        self.choice_relations = set()
+        self.activity_set = []
+        self.places = []
+        self.entry_tasks = []
+        self.exit_tasks = []
+        # Conjuntos para el algoritmo Alpha
+        self.pattern_pairs = []
+        self.maximal_patterns = []
+        self.place_labels = []
+        self.flow_relations = []
         
-    def analizar_log(self, cadena_log):
-        """Convierte una cadena de log en lista de trazas"""
-        self.trazas = []
+    def parse_event_log(self, log_string):
+        """Analiza un log de eventos en formato de texto"""
+        self.event_log = []
+        log_string = log_string.strip()
         
-        # Limpiar los corchetes externos si existen
-        cadena_log = cadena_log.strip()
-        if cadena_log.startswith('[') and cadena_log.endswith(']'):
-            cadena_log = cadena_log[1:-1]
+        # Quitar corchetes exteriores si existen
+        if log_string.startswith('[') and log_string.endswith(']'):
+            log_string = log_string[1:-1]
         
-        # Dividir por patrones de traza "<...>"
-        import re
-        patron_traza = re.compile(r'<[^>]*>')
-        coincidencias_traza = patron_traza.findall(cadena_log)
+        # Encontrar todas las trazas usando expresiones regulares
+        trace_pattern = re.compile(r'<[^>]*>')
+        trace_matches = trace_pattern.findall(log_string)
         
-        for cadena_traza in coincidencias_traza:
-            # Extraer multiplicador si existe (formato: <...>^n)
-            if '^' in cadena_traza:
-                parte_traza, parte_contador = cadena_traza.rsplit('^', 1)
-                contador = int(parte_contador.strip())
-                parte_traza = parte_traza.strip()
-            else:
-                parte_traza = cadena_traza
-                contador = 1
+        for trace_str in trace_matches:
+            # Extraer repeticiones (formato: <...>^n)
+            multiplier = 1
+            if '^' in trace_str:
+                trace_part, multiplier_part = trace_str.rsplit('^', 1)
+                multiplier = int(multiplier_part.strip())
+                trace_str = trace_part.strip()
             
-            # Limpiar y dividir la traza
-            traza = parte_traza.strip('<>').replace(' ', '').split(',')
-            # Eliminar elementos vacíos (por ejemplo, de "d,,e" → ['d', '', 'e'] → ['d', 'e'])
-            traza = [act for act in traza if act]
+            # Extraer actividades de la traza
+            activities = trace_str.strip('<>').replace(' ', '').split(',')
+            activities = [act for act in activities if act]
             
             # Añadir la traza el número de veces indicado
-            self.trazas.extend([traza] * contador)
+            self.event_log.extend([activities] * multiplier)
         
         return self
 
-    def calcular_relaciones(self):
-        """Calcula todas las relaciones entre actividades"""
-        self.actividades = sorted({act for traza in self.trazas for act in traza})
-        self.directas = {}
+    def discover_relations(self):
+        """Descubre las relaciones entre actividades en el log"""
+        # Extraer conjunto de actividades únicas y ordenadas
+        self.activity_set = sorted({act for trace in self.event_log for act in trace})
+        self.direct_successions = {}
 
-        # Sucesiones directas
-        for traza in self.trazas:
-            for i in range(len(traza) - 1):
-                par = (traza[i], traza[i + 1])
-                self.directas[par] = self.directas.get(par, 0) + 1
+        # Calcular sucesiones directas
+        for trace in self.event_log:
+            for i in range(len(trace) - 1):
+                pair = (trace[i], trace[i + 1])
+                self.direct_successions[pair] = self.direct_successions.get(pair, 0) + 1
 
-        # Inicializar relaciones
-        self.causalidad = set()
-        self.paralelo = set()
-        self.decision = set()
+        # Inicializar conjuntos de relaciones
+        self.causal_relations = set()
+        self.concurrent_relations = set()
+        self.choice_relations = set()
 
-        # Comparar todos los pares posibles
-        for x in self.actividades:
-            for y in self.actividades:
-                if x == y:
-                    self.decision.add((x, y))  # Relaciones reflexivas
-                    continue
+        # Analizar todos los pares posibles de actividades
+        for a, b in product(self.activity_set, self.activity_set):
+            if a == b:
+                self.choice_relations.add((a, b))  # Reflexivas
+                continue
 
-                xy = self.directas.get((x, y), 0)
-                yx = self.directas.get((y, x), 0)
+            ab_count = self.direct_successions.get((a, b), 0)
+            ba_count = self.direct_successions.get((b, a), 0)
 
-                if xy > 0 and yx == 0:
-                    self.causalidad.add((x, y))
-                elif xy > 0 and yx > 0:
-                    self.paralelo.add((x, y))
-                elif xy == 0 and yx == 0:
-                    self.decision.add((x, y))
+            if ab_count > 0 and ba_count == 0:  # a → b pero no b → a
+                self.causal_relations.add((a, b))
+            elif ab_count > 0 and ba_count > 0:  # a → b y b → a
+                self.concurrent_relations.add((a, b))
+            elif ab_count == 0 and ba_count == 0:  # No sucesión directa
+                self.choice_relations.add((a, b))
         
-        # Identificar tareas iniciales y finales
-        self._identificar_tareas_iniciales_finales()
+        # Identificar tareas de entrada y salida
+        self._identify_boundary_tasks()
 
-        return self  # Permite encadenamiento de métodos
+        return self
         
-    def _identificar_tareas_iniciales_finales(self):
-        """Identifica las tareas iniciales y finales en el log"""
-        todas_las_tareas = set(self.actividades)
-        tareas_con_entrada = {y for x, y in self.causalidad}
-        tareas_con_salida = {x for x, y in self.causalidad}
+    def _identify_boundary_tasks(self):
+        """Identifica las tareas de entrada y salida en el proceso"""
+        all_tasks = set(self.activity_set)
         
-        # Tareas iniciales: las que no tienen entrada
-        self.tareas_iniciales = sorted(todas_las_tareas - tareas_con_entrada)
-        # Tareas finales: las que no tienen salida
-        self.tareas_finales = sorted(todas_las_tareas - tareas_con_salida)
+        # Tareas con alguna entrada (aparecen como destino en relaciones causales)
+        tasks_with_input = {b for _, b in self.causal_relations}
+        
+        # Tareas con alguna salida (aparecen como origen en relaciones causales)
+        tasks_with_output = {a for a, _ in self.causal_relations}
+        
+        # Las tareas de entrada son las que no tienen ninguna entrada
+        self.entry_tasks = sorted(all_tasks - tasks_with_input)
+        
+        # Las tareas de salida son las que no tienen ninguna salida
+        self.exit_tasks = sorted(all_tasks - tasks_with_output)
         
         return self
-
-    def procesar_log(self, cadena_log):
-        """Procesa un log completo: parsea y calcula las relaciones en un solo paso"""
-        return self.analizar_log(cadena_log).calcular_relaciones()
-
-    def imprimir_resultados(self):
-        """Muestra los resultados formateados con conteos finales (actualmente deshabilitado)"""
-        # Contar relaciones únicas (incluyendo reflexivas en decisiones)
-        total_directas = len(self.directas)
-        total_causalidad = len(self.causalidad)
-        total_paralelo = len(self.paralelo)
-        total_decision = len(self.decision)
-
-        # Print statements removed
-        
-        return self  # Permite encadenamiento de métodos
-    def maximizar_pares(self, Xl, Tl):
-        """Filtra los pares en Xl para obtener solo aquellos que son máximos"""
-        Yl = []
-        for A in Tl:
-            for B in Tl:
-                if A != B:
-                    A_set = {A}
-                    B_set = {B}
-                    if all((a, b) in Xl for a in A_set for b in B_set) and \
-                       all((a1, a2) in self.decision for a1 in A_set for a2 in A_set if a1 != a2) and \
-                       all((b1, b2) in self.decision for b1 in B_set for b2 in B_set if b1 != b2):
-                        Yl.append((A_set, B_set))
-        return Yl
-
-    def obtener_relaciones(self):
-        """Devuelve las relaciones en formato de diccionario (para compatibilidad)"""
-        return {
-            'directas': self.directas,
-            'causalidad': self.causalidad,
-            'paralelo': self.paralelo,
-            'decision': self.decision,
-            'actividades': self.actividades
-        }
     
-    def calcular_lugares(self):
-        """Calcula los lugares (plazas) considerando paralelismos y maximalidad."""
-        actividades = self.actividades
+    def create_footprint_matrix(self):
+        """Crea la matriz de huella del proceso"""
+        matrix = pd.DataFrame('', index=self.activity_set, columns=self.activity_set)
         
-        # Generar conjuntos de entrada (A) válidos: paralelos o en decisión
-        candidatos_A = []
-        for r in range(1, len(actividades)+1):
-            for subset in combinations(actividades, r):
-                conjunto_subset = set(subset)
-                valido = True
-                for a1, a2 in combinations(conjunto_subset, 2):
-                    if (a1, a2) not in self.decision and (a1, a2) not in self.paralelo:
-                        valido = False
-                        break
-                if valido:
-                    candidatos_A.append(frozenset(conjunto_subset))  # Usar frozenset para evitar duplicados
-        
-        # Generar conjuntos de salida (B) válidos: misma lógica que A
-        candidatos_B = []
-        for r in range(1, len(actividades)+1):
-            for subset in combinations(actividades, r):
-                conjunto_subset = set(subset)
-                valido = True
-                for b1, b2 in combinations(conjunto_subset, 2):
-                    if (b1, b2) not in self.decision and (b1, b2) not in self.paralelo:
-                        valido = False
-                        break
-                if valido:
-                    candidatos_B.append(frozenset(conjunto_subset))
-        
-        # Encontrar pares (A, B) donde todas las actividades en A causan las de B
-        pares_validos = []
-        for A in candidatos_A:
-            for B in candidatos_B:
-                causal_valido = True
-                for a in A:
-                    for b in B:
-                        if (a, b) not in self.causalidad:
-                            causal_valido = False
-                            break
-                    if not causal_valido:
-                        break
-                if causal_valido:
-                    pares_validos.append((A, B))
-        
-        # Filtrar pares máximos: eliminar los cubiertos por otros
-        pares_maximos = []
-        for par in pares_validos:
-            A, B = par
-            es_maximal = True
-            for otro_par in pares_validos:
-                otro_A, otro_B = otro_par
-                if A.issubset(otro_A) and B.issubset(otro_B) and par != otro_par:
-                    es_maximal = False
-                    break
-            if es_maximal:
-                pares_maximos.append((A, B))
-        
-        # Eliminar duplicados y almacenar
-        self.lugares = list({(tuple(sorted(A)), tuple(sorted(B))) for A, B in pares_maximos})
-        return self
-
-    def imprimir_lugares(self):
-        """Imprime los lugares (plazas) en formato legible (actualmente deshabilitado)"""
-        if not hasattr(self, 'lugares'):
-            self.calcular_lugares()
-        
-        # Print statements removed
-        return self
-
-    def hay_flechas_repetidas_fila(self, fila, matriz):
-        """Verifica si hay flechas repetidas en una fila"""
-        repetidos = []
-        for col in self.actividades:
-            if matriz.loc[fila, col] == '->':
-                repetidos.append(col)
-        
-        if len(repetidos) > 1:
-            return (fila, repetidos)
-        return None
-    
-    def hay_flechas_repetidas_columna(self, columna, matriz):
-        """Verifica si hay flechas repetidas en una columna"""
-        repetidos = []
-        for fila in self.actividades:
-            if matriz.loc[fila, columna] == '->':
-                repetidos.append(fila)
-        
-        if len(repetidos) > 1:
-            return (repetidos, columna)
-        return None
-    
-    def construir_matriz_huella_pandas(self):
-        """Construye la matriz de huella como DataFrame de pandas"""
-        matriz = pd.DataFrame('', index=self.actividades, columns=self.actividades)
-        
-        # Llenar con símbolos
-        for x, y in self.causalidad:
-            matriz.loc[x, y] = '->'
-            matriz.loc[y, x] = '<-'
+        # Rellenar la matriz según los tipos de relaciones
+        for a, b in self.causal_relations:
+            matrix.loc[a, b] = '->'
+            matrix.loc[b, a] = '<-'
             
-        for x, y in self.paralelo:
-            matriz.loc[x, y] = '||'
-            matriz.loc[y, x] = '||'
+        for a, b in self.concurrent_relations:
+            matrix.loc[a, b] = '||'
+            matrix.loc[b, a] = '||'
             
-        for x, y in self.decision:
-            matriz.loc[x, y] = '#'
+        for a, b in self.choice_relations:
+            matrix.loc[a, b] = '#'
         
-        return matriz
+        return matrix
+
+    def find_multiple_arrows_in_row(self, row, matrix):
+        """Encuentra múltiples flechas salientes de una fila"""
+        targets = [col for col in self.activity_set if matrix.loc[row, col] == '->']
+        return (row, targets) if len(targets) > 1 else None
     
-    def tablita_ideas(self, x):
-        """Determina el tipo de unión o división basado en los valores de la matriz"""
-        if isinstance(x[0], tuple):
-            if (x[0][0], x[0][1]) in self.decision or (x[0][1], x[0][0]) in self.decision:
+    def find_multiple_arrows_in_column(self, column, matrix):
+        """Encuentra múltiples flechas entrantes a una columna"""
+        sources = [row for row in self.activity_set if matrix.loc[row, column] == '->']
+        return (sources, column) if len(sources) > 1 else None
+    
+    def determine_pattern_type(self, pattern):
+        """Determina si el patrón es de tipo Choice (#) o Paralelo (||)"""
+        # Para patrones con entrada múltiple: (a,b) → c
+        if isinstance(pattern[0], tuple):
+            a, b = pattern[0]
+            if (a, b) in self.choice_relations or (b, a) in self.choice_relations:
                 return '#'
-            elif (x[0][0], x[0][1]) in self.paralelo or (x[0][1], x[0][0]) in self.paralelo:
+            if (a, b) in self.concurrent_relations or (b, a) in self.concurrent_relations:
                 return '||'
+        # Para patrones con salida múltiple: a → (b,c)
         else:
-            if (x[1][0], x[1][1]) in self.decision or (x[1][1], x[1][0]) in self.decision:
+            b, c = pattern[1]
+            if (b, c) in self.choice_relations or (c, b) in self.choice_relations:
                 return '#'
-            elif (x[1][0], x[1][1]) in self.paralelo or (x[1][1], x[1][0]) in self.paralelo:
+            if (b, c) in self.concurrent_relations or (c, b) in self.concurrent_relations:
                 return '||'
         return None
     
-    def su_contrario_tiene_paralelos(self, letras, lista, posicion):
-        """Verifica si el contrario tiene paralelos"""
-        for i in lista:
-            if (letras[0] in i[posicion] or letras[1] in i[posicion]):
-                if (self.tablita_ideas(i) == '#'):
+    def has_opposite_parallel_pattern(self, elements, patterns, position):
+        """Verifica si existe un patrón paralelo opuesto"""
+        for pattern in patterns:
+            if elements[0] in pattern[position] or elements[1] in pattern[position]:
+                if self.determine_pattern_type(pattern) == '#':
                     return False
         return True
     
-    def su_complemento_tiene_hashtag(self, letra, complemento, posicion):
-        """Verifica si el complemento tiene un hashtag"""
-        for i in complemento:
-            if (letra in i[posicion]):
-                if (self.tablita_ideas(i) == '#'):
+    def has_hash_in_complement(self, element, complements, position):
+        """Verifica si hay un patrón de elección en el complemento"""
+        for comp in complements:
+            if element in comp[position]:
+                if self.determine_pattern_type(comp) == '#':
                     return True
         return False
 
-    def validos(self, filas, columnas):
-        """Determina filas y columnas válidas basado en el tipo de unión o división"""
-        validas = []
-        for i in filas:
-            resul = self.tablita_ideas(i)
-            if resul == '#':
-                validas.append(i)
-            elif resul == '||':
-                if (self.su_contrario_tiene_paralelos(i[1], columnas, 1) and 
-                    not self.su_complemento_tiene_hashtag(i[0], filas, 0)):
-                    validas.append(i)
-                    
-        for i in columnas:
-            resul = self.tablita_ideas(i)
-            if resul == '#':
-                validas.append(i)
-            elif resul == '||':
-                if (self.su_contrario_tiene_paralelos(i[0], filas, 0) and 
-                    not self.su_complemento_tiene_hashtag(i[1], columnas, 1)):
-                    validas.append(i)
-                    
-        return validas
+    def filter_valid_patterns(self, row_patterns, col_patterns):
+        """Filtra los patrones válidos según reglas del algoritmo Alpha"""
+        valid_patterns = []
+        
+        # Procesar patrones de fila
+        for pattern in row_patterns:
+            pattern_type = self.determine_pattern_type(pattern)
+            if pattern_type == '#':
+                valid_patterns.append(pattern)
+            elif pattern_type == '||':
+                if (self.has_opposite_parallel_pattern(pattern[1], col_patterns, 1) and 
+                    not self.has_hash_in_complement(pattern[0], row_patterns, 0)):
+                    valid_patterns.append(pattern)
+        
+        # Procesar patrones de columna
+        for pattern in col_patterns:
+            pattern_type = self.determine_pattern_type(pattern)
+            if pattern_type == '#':
+                valid_patterns.append(pattern)
+            elif pattern_type == '||':
+                if (self.has_opposite_parallel_pattern(pattern[0], row_patterns, 0) and 
+                    not self.has_hash_in_complement(pattern[1], col_patterns, 1)):
+                    valid_patterns.append(pattern)
+        
+        return valid_patterns
     
-    def descomponer_fila(self, r_filas):
-        """Descompone filas complejas en filas más simples"""
-        aux = []
-        for i in range(len(r_filas)):
-            tam = len(r_filas[i][1])
-            if tam > 2:
-                for j in range(tam - 1):
-                    for k in range(j + 1, tam):
-                        resultado = (r_filas[i][0], (r_filas[i][1][j], r_filas[i][1][k]))
-                        aux.append(resultado)
+    def expand_row_patterns(self, row_patterns):
+        """Expande patrones de fila complejos en pares de actividades"""
+        expanded_patterns = []
+        
+        for source, targets in row_patterns:
+            if len(targets) > 2:  # Si hay más de dos objetivos
+                # Crear todas las combinaciones posibles de pares de objetivos
+                for i, j in combinations(targets, 2):
+                    expanded_patterns.append((source, (i, j)))
             else:
-                aux.append((r_filas[i][0], tuple(r_filas[i][1])))
-                              
-        return aux
+                # Si solo hay dos objetivos, mantener como está
+                expanded_patterns.append((source, tuple(targets)))
+        
+        return expanded_patterns
     
-    def decomponer_columna(self, r_columnas):
-        """Descompone columnas complejas en columnas más simples"""
-        aux = []
-        for i in range(len(r_columnas)):
-            tam = len(r_columnas[i][0])
-            if tam > 2:
-                for j in range(tam - 1):
-                    for k in range(j + 1, tam):
-                        resultado = ((r_columnas[i][0][j], r_columnas[i][0][k]), r_columnas[i][1])
-                        aux.append(resultado)
+    def expand_column_patterns(self, col_patterns):
+        """Expande patrones de columna complejos en pares de actividades"""
+        expanded_patterns = []
+        
+        for sources, target in col_patterns:
+            if len(sources) > 2:  # Si hay más de dos fuentes
+                # Crear todas las combinaciones posibles de pares de fuentes
+                for i, j in combinations(sources, 2):
+                    expanded_patterns.append(((i, j), target))
             else:
-                aux.append((tuple(r_columnas[i][0]), r_columnas[i][1]))
-                              
-        return aux
+                # Si solo hay dos fuentes, mantener como está
+                expanded_patterns.append((tuple(sources), target))
+        
+        return expanded_patterns
     
-    def sacar_complejos(self):
-        """Identifica y descompone filas y columnas complejas"""
-        r_filas = []
-        r_columnas = []
-        matriz = self.construir_matriz_huella_pandas()
+    def discover_complex_patterns(self):
+        """Identifica patrones complejos en la matriz de huella"""
+        matrix = self.create_footprint_matrix()
+        row_patterns = []
+        col_patterns = []
         
-        for l in self.actividades:
-            if self.hay_flechas_repetidas_fila(l, matriz) is not None:
-                r_filas.append(self.hay_flechas_repetidas_fila(l, matriz)) 
-            if self.hay_flechas_repetidas_columna(l, matriz) is not None:
-                r_columnas.append(self.hay_flechas_repetidas_columna(l, matriz))
-        
-        r_filas = self.descomponer_fila(r_filas)
-        r_columnas = self.decomponer_columna(r_columnas)
-        
-        validos = self.validos(r_filas, r_columnas)
-        
-        return validos
-    
-    def comer_simples(self, xl):
-        """Elimina conexiones simples de XL"""
-        sobrevivientes = []
-        for i in range(len(xl)):
-            es_valido = True
-            for j in range(len(xl)):
-                if i == j:
-                    continue
-                if ((isinstance(xl[j][0], tuple) and 
-                     (xl[i] == (xl[j][0][0], xl[j][1]) or xl[i] == (xl[j][0][1], xl[j][1]))) or 
-                    (isinstance(xl[j][1], tuple) and 
-                     (xl[i] == (xl[j][0], xl[j][1][0]) or xl[i] == (xl[j][0], xl[j][1][1])))):
-                    es_valido = False
-                    break
-            if es_valido:
-                sobrevivientes.append(xl[i])
+        # Buscar patrones en filas y columnas
+        for activity in self.activity_set:
+            row_result = self.find_multiple_arrows_in_row(activity, matrix)
+            if row_result:
+                row_patterns.append(row_result)
                 
-        return sobrevivientes
-    
-    def pretty(self, a):
-        """Convierte una conexión a un formato de cadena legible"""
-        if isinstance(a[0], tuple):
-            return f"P({{{a[0][0]},{a[0][1]}}},{{{a[1]}}})"
-        elif isinstance(a[1], tuple):
-            return f"P({{{a[0]}}},{{{a[1][0]},{a[1][1]}}})"
-        return f"P({{{a[0]}}},{{{a[1]}}})"
-    
-    def convertir_string_yl(self, yl):
-        """Convierte YL a una lista de cadenas legibles"""
-        pl = []
-        for i in yl:
-            pl.append(self.pretty(i))
-        return pl
-
-    def generar_xl(self):
-        """Paso 4: Genera el conjunto XL siguiendo la lógica de Algoritmo_Alpha"""
-        # XL contiene todas las conexiones causales directas
-        self.xl = list(self.causalidad)
-        # Agregar patrones complejos identificados
-        self.xl += self.sacar_complejos()
-        return self
-    
-    def generar_yl(self):
-        """Paso 5: Genera el conjunto YL (pares máximos) siguiendo la lógica de Algoritmo_Alpha"""
-        # YL se obtiene eliminando conexiones simples de XL
-        self.yl = self.comer_simples(self.xl)
-        return self
-    
-    def generar_pl(self):
-        """Paso 6: Genera el conjunto PL (lugares) siguiendo la lógica de Algoritmo_Alpha"""
-        # PL contiene representaciones string de YL más 'iL' y 'oL'
-        self.pl = []
+            col_result = self.find_multiple_arrows_in_column(activity, matrix)
+            if col_result:
+                col_patterns.append(col_result)
         
-        # Convertir YL a formato de lugares
-        lugares_yl = self.convertir_string_yl(self.yl)
+        # Expandir patrones complejos a pares
+        expanded_rows = self.expand_row_patterns(row_patterns)
+        expanded_cols = self.expand_column_patterns(col_patterns)
         
-        # Crear componentes del lugar (igual que antes pero con formato diferente)
-        for item in self.yl:
-            if isinstance(item[0], tuple):
-                entrada = set(item[0])
-            else:
-                entrada = {item[0]}
-                
-            if isinstance(item[1], tuple):
-                salida = set(item[1])
-            else:
-                salida = {item[1]}
-                
-            self.pl.append((entrada, salida))
+        # Filtrar patrones válidos
+        valid_patterns = self.filter_valid_patterns(expanded_rows, expanded_cols)
+        
+        return valid_patterns
+    
+    def remove_simple_patterns(self, patterns):
+        """Elimina patrones simples que están incluidos en patrones complejos"""
+        survivors = []
+        
+        for i, pattern_i in enumerate(patterns):
+            is_valid = True
             
-        # Añadir lugar inicial y final
-        lugar_inicial = (set(['iL']), set(self.tareas_iniciales))
-        lugar_final = (set(self.tareas_finales), set(['oL']))
+            for j, pattern_j in enumerate(patterns):
+                if i == j:  # No comparar con sí mismo
+                    continue
+                    
+                # Verificar si pattern_i está incluido en pattern_j
+                if isinstance(pattern_j[0], tuple):
+                    if (pattern_i == (pattern_j[0][0], pattern_j[1]) or 
+                        pattern_i == (pattern_j[0][1], pattern_j[1])):
+                        is_valid = False
+                        break
+                
+                if isinstance(pattern_j[1], tuple):
+                    if (pattern_i == (pattern_j[0], pattern_j[1][0]) or 
+                        pattern_i == (pattern_j[0], pattern_j[1][1])):
+                        is_valid = False
+                        break
+            
+            if is_valid:
+                survivors.append(pattern_i)
         
-        self.pl.append(lugar_inicial)
-        self.pl.append(lugar_final)
+        return survivors
+    
+    def format_place_label(self, pattern):
+        """Formatea un patrón como etiqueta legible de lugar"""
+        if isinstance(pattern[0], tuple):
+            return f"P({{{pattern[0][0]},{pattern[0][1]}}},{{{pattern[1]}}})"
+        elif isinstance(pattern[1], tuple):
+            return f"P({{{pattern[0]}}},{{{pattern[1][0]},{pattern[1][1]}}})"
+        return f"P({{{pattern[0]}}},{{{pattern[1]}}})"
+    
+    def generate_pattern_pairs(self):
+        # Iniciar con las relaciones causales directas
+        self.pattern_pairs = list(self.causal_relations)
+        
+        # Agregar los patrones complejos
+        self.pattern_pairs += self.discover_complex_patterns()
         
         return self
-
-    def generar_fl(self):
-        """Paso 7: Genera el conjunto FL (flujos)"""
-        self.fl = []
+    
+    def generate_maximal_patterns(self):
+        self.maximal_patterns = self.remove_simple_patterns(self.pattern_pairs)
+        return self
+    
+    def generate_place_labels(self):
+        # Convertir patrones a lugares formalizados
+        self.places = []
+        
+        # Procesar cada patrón maximal
+        for pattern in self.maximal_patterns:
+            # Determinar actividades de entrada
+            if isinstance(pattern[0], tuple):
+                input_set = set(pattern[0])
+            else:
+                input_set = {pattern[0]}
+                
+            # Determinar actividades de salida
+            if isinstance(pattern[1], tuple):
+                output_set = set(pattern[1])
+            else:
+                output_set = {pattern[1]}
+            
+            # Guardar el lugar como un par (entradas, salidas)
+            self.places.append((input_set, output_set))
+        
+        # Añadir lugar inicial y final
+        initial_place = ({"Il"}, set(self.entry_tasks))
+        final_place = (set(self.exit_tasks), {"Ol"})
+        
+        self.places.append(initial_place)
+        self.places.append(final_place)
+        
+        # Generar etiquetas para visualización
+        self.place_labels = [self.format_place_label(pattern) for pattern in self.maximal_patterns]
+        self.place_labels.extend(["Il", "Ol"])
+        
+        return self
+    
+    def generate_flow_relations(self):
+        self.flow_relations = []
         
         # Generar flujos entre lugares y actividades
-        for idx, lugar in enumerate(self.pl):
-            entradas, salidas = lugar
+        for idx, (inputs, outputs) in enumerate(self.places):
+            place_id = f"p{idx}"
             
-            # Para cada actividad de entrada al lugar
-            for entrada in entradas:
-                if entrada != 'iL':  # Ignorar el inicio lógico
-                    self.fl.append((entrada, f"p{idx}"))
+            # Conexiones de entrada al lugar
+            for input_act in inputs:
+                if input_act != "Il":  # Ignorar la fuente lógica
+                    self.flow_relations.append((input_act, place_id))
             
-            # Para cada actividad de salida del lugar
-            for salida in salidas:
-                if salida != 'oL':  # Ignorar el fin lógico
-                    self.fl.append((f"p{idx}", salida))
+            # Conexiones de salida del lugar
+            for output_act in outputs:
+                if output_act != "Ol":  # Ignorar el sumidero lógico
+                    self.flow_relations.append((place_id, output_act))
         
         return self
     
-    def ejecutar_ocho_pasos(self):
-        """Ejecuta los 8 pasos del algoritmo Alpha (sin impresiones)"""
-        # Paso 1: Ya tenemos identificadas las actividades
-        
-        # Paso 2 y 3: Identificar tareas iniciales y finales
-        
-        # Paso 4: Generar XL
-        self.generar_xl()
-        
-        # Paso 5: Generar YL
-        self.generar_yl()
-        
-        # Paso 6: Generar PL
-        self.generar_pl()
-        
-        # Paso 7: Generar FL
-        self.generar_fl()
-        
-        # Paso 8: Generar la red de Petri (renderización)
-        
-        # Actualizar lugares para compatibilidad
-        self.lugares = [(sorted(list(entradas)), sorted(list(salidas))) for entradas, salidas in self.pl]
+    def execute_alpha_algorithm(self):
+        self.generate_pattern_pairs()
+        self.generate_maximal_patterns()
+        self.generate_place_labels()
+        self.generate_flow_relations()
+        self.places = [(sorted(list(inputs)), sorted(list(outputs))) for inputs, outputs in self.places]
         
         return self
+    
+    def visualize_petri_net(self):
+        """Genera una visualización de la red de Petri completa usando NetworkX"""
+        try:
+            import networkx as nx
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("Error: Las bibliotecas NetworkX y/o Matplotlib no están instaladas.")
+            print("Instálalas con 'pip install networkx matplotlib'.")
+            return None
         
-    def imprimir_todo(self):
-        """Imprime todos los resultados del análisis"""
-        print("\n=== ANÁLISIS COMPLETO DEL REGISTRO DE EVENTOS ===")
+        # Crear un grafo dirigido
+        G = nx.DiGraph()
         
-        print("\n1. TRAZAS IDENTIFICADAS:")
-        for i, traza in enumerate(self.trazas, 1):
-            print(f"  Traza {i}: {traza}")
+        # Preparar nodos de actividades y lugares
+        activity_nodes = self.activity_set
+        place_nodes = [f"p{idx}" for idx in range(len(self.places))]
         
-        print("\n2. ACTIVIDADES:")
-        print(f"  Total: {len(self.actividades)}")
-        print(f"  Elementos: {', '.join(self.actividades)}")
+        # Lista para almacenar aristas con etiquetas
+        edges = []
         
-        print("\n3. TAREAS INICIALES Y FINALES:")
-        print(f"  Iniciales: {', '.join(self.tareas_iniciales)}")
-        print(f"  Finales: {', '.join(self.tareas_finales)}")
+        # Añadir las relaciones de flujo
+        for src, dst in self.flow_relations:
+            edges.append((src, dst, f"{src}→{dst}"))
         
-        print("\n4. RELACIONES DIRECTAS:")
-        for (x, y), contador in sorted(self.directas.items()):
-            print(f"  {x} > {y} ({contador} veces)")
-            
-        print("\n5. RELACIONES DE CAUSALIDAD:")
-        for x, y in sorted(self.causalidad):
-            print(f"  {x} → {y}")
-            
-        print("\n6. RELACIONES DE PARALELISMO:")
-        for x, y in sorted(self.paralelo):
-            print(f"  {x} || {y}")
-            
-        print("\n7. RELACIONES DE DECISIÓN:")
-        for x, y in sorted(self.decision):
-            print(f"  {x} # {y}")
-            
-        print("\n8. MATRIZ DE HUELLA (FOOTPRINT):")
-        matriz = self.construir_matriz_huella_pandas()
-        print(matriz)
+        # Agregar aristas al grafo
+        G.add_edges_from([(u, v) for u, v, _ in edges])
         
-        # Si se ha ejecutado el algoritmo Alpha completo
-        if hasattr(self, 'xl') and self.xl:
-            print("\n9. RESULTADOS ALGORITMO ALPHA (8 PASOS):")
-            print("\n   a. XL (conexiones):")
-            for item in self.xl:
-                print(f"      {item}")
-                
-            print("\n   b. YL (pares máximos):")
-            for item in self.yl:
-                print(f"      {item}")
-                
-            print("\n   c. PL (lugares):")
-            for idx, lugar in enumerate(self.pl):
-                entradas = ", ".join(sorted(lugar[0]))
-                salidas = ", ".join(sorted(lugar[1]))
-                print(f"      p{idx}: {{{entradas}}} → {{{salidas}}}")
-                
-            print("\n   d. FL (flujos):")
-            for origen, destino in self.fl:
-                print(f"      {origen} → {destino}")
-                
-        print("\n=== FIN DEL ANÁLISIS ===\n")
-        return self
+        # Posicionar los nodos
+        pos = nx.spring_layout(G, seed=42)  # Usar una semilla fija para reproducibilidad
+        
+        # Crear una nueva figura y ejes
+        fig, ax = plt.subplots(figsize=(10, 8))
+        
+        # Dibujar nodos de lugar (círculos)
+        nx.draw_networkx_nodes(G, pos, nodelist=place_nodes, 
+                               node_shape='o', node_color='lightblue', 
+                               node_size=800, alpha=0.8, ax=ax)
+        
+        # Dibujar nodos de actividad (cuadrados)
+        nx.draw_networkx_nodes(G, pos, nodelist=activity_nodes, 
+                               node_shape='s', node_color='lightgreen', 
+                               node_size=600, alpha=0.8, ax=ax)
+        
+        # Dibujar aristas con flechas
+        nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=15, 
+                               edge_color="black", width=1.0, ax=ax)
+        
+        # Dibujar etiquetas de nodos con tamaño adecuado
+        nx.draw_networkx_labels(G, pos, font_size=10, font_weight="bold", ax=ax)
+        
+        # Crear etiquetas de aristas
+        edge_labels = {(u, v): label for u, v, label in edges}
+        
+        # Dibujar etiquetas de las aristas
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, 
+                                    font_size=8, font_color="red", ax=ax)
+        
+        ax.set_title("Red de Petri - Algoritmo Alpha")
+        ax.axis('off')  # Ocultar ejes
+        
+        plt.tight_layout()
+        return fig
+    
+    def visualize_places(self):
+        """Genera una visualización de los lugares en la red de Petri usando NetworkX"""
+        try:
+            import networkx as nx
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("Error: Las bibliotecas NetworkX y/o Matplotlib no están instaladas.")
+            print("Instálalas con 'pip install networkx matplotlib'.")
+            return None
+        
+        # Crear un grafo dirigido
+        G = nx.DiGraph()
+        
+        # Lista para nodos y etiquetas
+        nodes = []
+        node_labels = {}
+        
+        # Añadir lugares como nodos
+        for idx, (inputs, outputs) in enumerate(self.places):
+            place_id = f"p{idx}"
+            nodes.append(place_id)
+            inputs_str = ", ".join(sorted(inputs))
+            outputs_str = ", ".join(sorted(outputs))
+            node_labels[place_id] = f"p{idx}: {{{inputs_str}}} → {{{outputs_str}}}"
+        
+        # Lista para almacenar aristas con etiquetas
+        edges = []
+        
+        # Determinar conexiones entre lugares basados en actividades comunes
+        for i, (_, outputs_i) in enumerate(self.places):
+            for j, (inputs_j, _) in enumerate(self.places):
+                if i != j:
+                    common_activities = set(outputs_i).intersection(set(inputs_j))
+                    if common_activities:
+                        edges.append((f"p{i}", f"p{j}", ", ".join(sorted(common_activities))))
+        
+        # Agregar aristas al grafo
+        G.add_edges_from([(u, v) for u, v, _ in edges])
+        G.add_nodes_from(nodes)
+        
+        # Posicionar los nodos
+        pos = nx.spring_layout(G, seed=42)  # Usar una semilla fija para reproducibilidad
+        
+        # Crear una nueva figura y ejes
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        # Dibujar nodos
+        nx.draw_networkx_nodes(G, pos, nodelist=nodes, 
+                               node_shape='o', node_color='lightblue', 
+                               node_size=2500, alpha=0.8, ax=ax)
+        
+        # Dibujar aristas con flechas
+        nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=15, 
+                               edge_color="black", width=1.0, ax=ax)
+        
+        # Dibujar etiquetas de nodos personalizadas (más pequeñas para caber en el gráfico)
+        for node, label in node_labels.items():
+            x, y = pos[node]
+            ax.text(x, y, label, fontsize=8, ha='center', va='center', 
+                     bbox=dict(facecolor='white', alpha=0.7, boxstyle='round'))
+        
+        # Crear etiquetas de aristas
+        edge_labels = {(u, v): label for u, v, label in edges}
+        
+        # Dibujar etiquetas de las aristas
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, 
+                                    font_size=8, font_color="red", ax=ax)
+        
+        ax.set_title("Lugares identificados - Algoritmo Alpha")
+        ax.axis('off')  # Ocultar ejes
+        
+        plt.tight_layout()
+        return fig
 
 if __name__ == "__main__":
-    # Ejemplo de uso del algoritmo Alpha
-    print("=== EJEMPLO DE USO DEL ALGORITMO ALPHA ===")
+    # Ejemplo de uso de ProcessMiner
+    print("=== DEMOSTRACIÓN DE PROCESS MINER ===")
     
-    # Crear una instancia del algoritmo
-    alpha = Alpha()
+    # Crear instancia del minero de procesos
+    miner = Alpha()
     
     # Ejemplo de log de eventos
     log_ejemplo = "[<a,b,c,d>^3, <a,c,b,d>^2, <a,e,d>^1]"
-    print(f"Log de eventos: {log_ejemplo}\n")
+    print(f"Log de eventos de entrada: {log_ejemplo}\n")
     
-    # Procesar el log y ejecutar el algoritmo Alpha completo
-    alpha.analizar_log(log_ejemplo).calcular_relaciones().ejecutar_ocho_pasos()
+    # Ejecutar el algoritmo completo
+    miner.parse_event_log(log_ejemplo).discover_relations().execute_alpha_algorithm()
     
-    # Mostrar resultados completos
-    alpha.imprimir_todo()
+    # Mostrar resultados principales
+    print(f"Actividades descubiertas: {miner.activity_set}")
+    print(f"Tareas de entrada: {miner.entry_tasks}")
+    print(f"Tareas de salida: {miner.exit_tasks}")
     
-    # Ejemplo de acceso a resultados específicos
-    print("=== ACCESO A RESULTADOS ESPECÍFICOS ===")
-    print(f"Actividades: {alpha.actividades}")
-    print(f"Tareas iniciales: {alpha.tareas_iniciales}")
-    print(f"Tareas finales: {alpha.tareas_finales}")
-    print(f"Total de lugares: {len(alpha.pl)}")
+    # Mostrar matriz de huella
+    print("\nMatriz de huella del proceso:")
+    print(miner.create_footprint_matrix())
     
-    # Ejemplo de verificación de relaciones específicas
-    a, b = 'a', 'b'
-    print(f"\nRelación entre '{a}' y '{b}':")
-    if (a, b) in alpha.causalidad:
-        print(f"  '{a}' causa '{b}'")
-    elif (a, b) in alpha.paralelo:
-        print(f"  '{a}' es paralelo a '{b}'")
-    elif (a, b) in alpha.decision:
-        print(f"  '{a}' está en relación de decisión con '{b}'")
-    else:
-        print(f"  No hay relación directa entre '{a}' y '{b}'")
+    # Mostrar lugares descubiertos
+    print("\nLugares en la red de Petri:")
+    for idx, (inputs, outputs) in enumerate(miner.places):
+        inputs_str = ", ".join(sorted(inputs))
+        outputs_str = ", ".join(sorted(outputs))
+        print(f"p{idx}: {{{inputs_str}}} → {{{outputs_str}}}")
