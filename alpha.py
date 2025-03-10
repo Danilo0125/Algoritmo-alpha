@@ -375,7 +375,24 @@ class Alpha:
         
         # Preparar nodos de actividades y lugares
         activity_nodes = self.activity_set
-        place_nodes = [f"p{idx}" for idx in range(len(self.places))]
+        place_nodes = []
+        place_labels = {}
+        
+        # Generar etiquetas descriptivas para los lugares
+        for idx, (inputs, outputs) in enumerate(self.places):
+            place_id = f"p{idx}"
+            place_nodes.append(place_id)
+            
+            # Formato especial para lugares iniciales/finales
+            if "Il" in inputs:
+                place_labels[place_id] = "Il"
+            elif "Ol" in outputs:
+                place_labels[place_id] = "Ol"
+            else:
+                # Formato descriptivo para lugares normales
+                inputs_str = ", ".join(sorted(inputs))
+                outputs_str = ", ".join(sorted(outputs))
+                place_labels[place_id] = f"p({{{inputs_str}}},{{{outputs_str}}})"
         
         # Lista para almacenar aristas con etiquetas
         edges = []
@@ -387,111 +404,41 @@ class Alpha:
         # Agregar aristas al grafo
         G.add_edges_from([(u, v) for u, v, _ in edges])
         
-        # Posicionar los nodos
+        # Posicionar los nodos (usar posicionamiento jerárquico para mejor flujo)
         pos = nx.spring_layout(G, seed=42)  # Usar una semilla fija para reproducibilidad
         
         # Crear una nueva figura y ejes
-        fig, ax = plt.subplots(figsize=(10, 8))
-        
-        # Dibujar nodos de lugar (círculos)
-        nx.draw_networkx_nodes(G, pos, nodelist=place_nodes, 
-                               node_shape='o', node_color='lightblue', 
-                               node_size=800, alpha=0.8, ax=ax)
+        fig, ax = plt.subplots(figsize=(12, 8))
         
         # Dibujar nodos de actividad (cuadrados)
         nx.draw_networkx_nodes(G, pos, nodelist=activity_nodes, 
                                node_shape='s', node_color='lightgreen', 
-                               node_size=600, alpha=0.8, ax=ax)
+                               node_size=800, alpha=0.8, ax=ax)
+        
+        # Dibujar nodos de lugar (círculos)
+        nx.draw_networkx_nodes(G, pos, nodelist=place_nodes, 
+                               node_shape='o', node_color='lightblue', 
+                               node_size=1000, alpha=0.8, ax=ax)
+        
+        # Dibujar etiquetas de actividades
+        nx.draw_networkx_labels(G, pos, labels={n: n for n in activity_nodes}, 
+                                font_size=12, font_weight="bold", ax=ax)
+        
+        # Dibujar etiquetas de lugares con formato personalizado
+        nx.draw_networkx_labels(G, pos, labels=place_labels, 
+                                font_size=8, font_color="darkblue", ax=ax)
         
         # Dibujar aristas con flechas
         nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=15, 
                                edge_color="black", width=1.0, ax=ax)
         
-        # Dibujar etiquetas de nodos con tamaño adecuado
-        nx.draw_networkx_labels(G, pos, font_size=10, font_weight="bold", ax=ax)
-        
-        # Crear etiquetas de aristas
-        edge_labels = {(u, v): label for u, v, label in edges}
-        
-        # Dibujar etiquetas de las aristas
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, 
-                                    font_size=8, font_color="red", ax=ax)
+        # Ocultar etiquetas de aristas para mayor claridad (opcional)
+        # Si prefieres mostrarlas, descomenta las siguientes líneas:
+        #edge_labels = {(u, v): label for u, v, label in edges}
+        #nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, 
+        #                           font_size=7, font_color="red", ax=ax)
         
         ax.set_title("Red de Petri - Algoritmo Alpha")
-        ax.axis('off')  # Ocultar ejes
-        
-        plt.tight_layout()
-        return fig
-    
-    def visualize_places(self):
-        """Genera una visualización de los lugares en la red de Petri usando NetworkX"""
-        try:
-            import networkx as nx
-            import matplotlib.pyplot as plt
-        except ImportError:
-            print("Error: Las bibliotecas NetworkX y/o Matplotlib no están instaladas.")
-            print("Instálalas con 'pip install networkx matplotlib'.")
-            return None
-        
-        # Crear un grafo dirigido
-        G = nx.DiGraph()
-        
-        # Lista para nodos y etiquetas
-        nodes = []
-        node_labels = {}
-        
-        # Añadir lugares como nodos
-        for idx, (inputs, outputs) in enumerate(self.places):
-            place_id = f"p{idx}"
-            nodes.append(place_id)
-            inputs_str = ", ".join(sorted(inputs))
-            outputs_str = ", ".join(sorted(outputs))
-            node_labels[place_id] = f"p{idx}: {{{inputs_str}}} → {{{outputs_str}}}"
-        
-        # Lista para almacenar aristas con etiquetas
-        edges = []
-        
-        # Determinar conexiones entre lugares basados en actividades comunes
-        for i, (_, outputs_i) in enumerate(self.places):
-            for j, (inputs_j, _) in enumerate(self.places):
-                if i != j:
-                    common_activities = set(outputs_i).intersection(set(inputs_j))
-                    if common_activities:
-                        edges.append((f"p{i}", f"p{j}", ", ".join(sorted(common_activities))))
-        
-        # Agregar aristas al grafo
-        G.add_edges_from([(u, v) for u, v, _ in edges])
-        G.add_nodes_from(nodes)
-        
-        # Posicionar los nodos
-        pos = nx.spring_layout(G, seed=42)  # Usar una semilla fija para reproducibilidad
-        
-        # Crear una nueva figura y ejes
-        fig, ax = plt.subplots(figsize=(12, 10))
-        
-        # Dibujar nodos
-        nx.draw_networkx_nodes(G, pos, nodelist=nodes, 
-                               node_shape='o', node_color='lightblue', 
-                               node_size=2500, alpha=0.8, ax=ax)
-        
-        # Dibujar aristas con flechas
-        nx.draw_networkx_edges(G, pos, arrowstyle="->", arrowsize=15, 
-                               edge_color="black", width=1.0, ax=ax)
-        
-        # Dibujar etiquetas de nodos personalizadas (más pequeñas para caber en el gráfico)
-        for node, label in node_labels.items():
-            x, y = pos[node]
-            ax.text(x, y, label, fontsize=8, ha='center', va='center', 
-                     bbox=dict(facecolor='white', alpha=0.7, boxstyle='round'))
-        
-        # Crear etiquetas de aristas
-        edge_labels = {(u, v): label for u, v, label in edges}
-        
-        # Dibujar etiquetas de las aristas
-        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, 
-                                    font_size=8, font_color="red", ax=ax)
-        
-        ax.set_title("Lugares identificados - Algoritmo Alpha")
         ax.axis('off')  # Ocultar ejes
         
         plt.tight_layout()
